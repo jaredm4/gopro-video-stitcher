@@ -1,0 +1,10 @@
+# Backups and editor files
+*.bak
+*.bundle
+*.orig
+*~
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
