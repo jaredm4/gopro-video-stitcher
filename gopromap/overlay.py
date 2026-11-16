@@ -6,13 +6,15 @@ matrix/range/bit depth so ffmpeg never has to colour-convert anything.
 """
 import math
 import os
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import numpy as np
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 SS = 2            # supersampling factor
-MAX_BASE = 6000   # max basemap side in px for --view follow
+BLOCK = 1024      # follow view: the basemap is built lazily in blocks of this many px
+MAX_BLOCKS = 12   # ...and this many blocks are kept in memory
 
 
 @dataclass
@@ -79,11 +81,6 @@ class Renderer:
             zf = min(math.log2(S * (1 - 2 * st.pad) / span / 256), max_zoom)
         else:
             zf = st.zoom
-            if st.style == "map":
-                while max(x1 - x0, y1 - y0) * 256 * 2 ** zf + S + 4 > MAX_BASE:
-                    zf -= 0.25
-                if zf < st.zoom:
-                    print(f"  note: route is large; follow zoom reduced to {zf:.2f}")
         self.zf = zf
         scale = 256 * 2.0 ** zf
         # Work relative to an integer origin to keep coordinates small.
@@ -109,9 +106,10 @@ class Renderer:
             m = S // 2 + 2
             region = (int(math.floor(self.px.min())) - m, int(math.floor(self.py.min())) - m,
                       int(math.ceil(self.px.max())) + m, int(math.ceil(self.py.max())) + m)
-        self.base = None
+        self.base = None           # fit view: one static basemap for the viewport
+        self._blocks = OrderedDict()  # follow view: lazily built basemap blocks
         self.region = region
-        if st.style == "map":
+        if st.style == "map" and st.view == "fit":
             self.base = self._build_base(region)
 
         self.c_line = ImageColor.getrgb(st.color) + (255,)
@@ -155,11 +153,51 @@ class Renderer:
         tx0, ty0 = math.floor(gx0 / f) - 1, math.floor(gy0 / f) - 1
         tx1, ty1 = math.ceil(gx1 / f) + 1, math.ceil(gy1 / f) + 1
         mos = ts.mosaic(zt, tx0, ty0, tx1, ty1)
-        if ts.downloaded:
-            print(f"  downloaded {ts.downloaded} map tiles (cached in {ts.cache})")
         out = mos.resize((gx1 - gx0, gy1 - gy0), Image.LANCZOS,
                          box=(gx0 / f - tx0, gy0 / f - ty0, gx1 / f - tx0, gy1 / f - ty0))
         return np.asarray(out, dtype=np.float32) / 255.0
+
+    def _block(self, bx, by):
+        key = (bx, by)
+        blk = self._blocks.get(key)
+        if blk is None:
+            x0, y0 = bx * BLOCK - self.ox, by * BLOCK - self.oy
+            blk = self._build_base((x0, y0, x0 + BLOCK, y0 + BLOCK))
+            self._blocks[key] = blk
+            if len(self._blocks) > MAX_BLOCKS:
+                self._blocks.popitem(last=False)
+        else:
+            self._blocks.move_to_end(key)
+        return blk
+
+    def _viewport(self, vx, vy):
+        """S x S basemap window whose top-left is route-space pixel (vx, vy)."""
+        S = self.S
+        gx, gy = vx + self.ox, vy + self.oy
+        out = np.empty((S, S, 3), np.float32)
+        for by in range(gy // BLOCK, (gy + S - 1) // BLOCK + 1):
+            for bx in range(gx // BLOCK, (gx + S - 1) // BLOCK + 1):
+                x0, y0 = max(gx, bx * BLOCK), max(gy, by * BLOCK)
+                x1, y1 = min(gx + S, (bx + 1) * BLOCK), min(gy + S, (by + 1) * BLOCK)
+                out[y0 - gy:y1 - gy, x0 - gx:x1 - gx] = self._block(bx, by)[
+                    y0 - by * BLOCK:y1 - by * BLOCK, x0 - bx * BLOCK:x1 - bx * BLOCK]
+        return out
+
+    def estimate_tiles(self, times):
+        """Rough number of map tiles a follow-view render of these times touches."""
+        if self.st.style != "map" or self.st.view != "follow" or not len(times):
+            return 0
+        S = self.S
+        gx = np.interp(times, self.t, self.px) + self.ox - S / 2
+        gy = np.interp(times, self.t, self.py) + self.oy - S / 2
+        blocks = set()
+        for dx in (0, S):
+            for dy in (0, S):
+                blocks.update(zip(((gx + dx) // BLOCK).astype(np.int64).tolist(),
+                                  ((gy + dy) // BLOCK).astype(np.int64).tolist()))
+        zt = max(0, min(self.tiles.max_zoom, math.ceil(self.zf)))
+        per_side = BLOCK / 2.0 ** (self.zf - zt) / 256
+        return int(len(blocks) * per_side * per_side)
 
     def _shape(self, draw, box, **kw):
         if self.st.shape == "circle":
@@ -266,9 +304,13 @@ class Renderer:
             vx, vy = int(round(cx - S / 2)), int(round(cy - S / 2))
         k = int(np.searchsorted(self.dt, t, side="right"))
         lp, la = _premult(self._route_layer(vx, vy, k, cx, cy))
-        if self.base is not None:
-            bx, by = vx - self.region[0], vy - self.region[1]
-            p = lp + self.base[by:by + S, bx:bx + S] * (1 - la)
+        if st.style == "map":
+            if self.base is not None:
+                bx, by = vx - self.region[0], vy - self.region[1]
+                bg = self.base[by:by + S, bx:bx + S]
+            else:
+                bg = self._viewport(vx, vy)
+            p = lp + bg * (1 - la)
             a = np.ones_like(la)
         else:
             p = lp

@@ -67,7 +67,7 @@ Value formats used below:
 |---|---|---|---|
 | `--style` | `map` or `path` | `map` | `map` = basemap tiles with the route on top. `path` = route line only, nothing downloaded. |
 | `--view` | `fit` or `follow` | `fit` | `fit` shows the whole route and the dot moves. `follow` is zoomed in, the dot stays centred and the map scrolls. |
-| `--zoom` | number, decimals allowed | `16` | Only for `--view follow`. Standard web-map zoom level: each +1 shows half as much ground. At 16 the default-size map covers roughly 700 m across at your latitude; 14 is about 3 km. Limited by the tile source (19 for `osm`, 17 for `topo`, 18 for `satellite`). |
+| `--zoom` | number, decimals allowed | `16` | Only for `--view follow`. Standard web-map zoom level: each +1 shows half as much ground. At 16 the default-size map covers roughly 750 m across at 43°N; 14 is about 3 km; 19 is about 90 m. Any route length works: map tiles are fetched as the camera moves, and `render` prints how many it expects to need. Past the tile source's finest level (19 for `osm`, 17 for `topo`, 18 for `satellite`) the map is enlarged and turns soft. |
 | `--shape` | `circle`, `rounded` or `square` | `circle` for map, `square` for path | Outline of the map area. |
 | `--size` | FRACTION | `0.2` | Map diameter (or side) relative to video height. `0.2` on 4K is 432 px. |
 | `--opacity` | 0..1 | `0.8` | Opacity of the map. `1` is solid. The coordinate text is always at least 0.9. |

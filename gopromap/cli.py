@@ -289,6 +289,15 @@ def run_overlay(args, clips, track, segments, out, still=False):
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         except FileNotFoundError:
             raise SystemExit("ffmpeg not found on PATH (or pass --ffmpeg).")
+        if tiles and st.view == "follow" and not still:
+            every = max(1, round(float(fps) / 2))
+            times = [float(n / fps) for a, b in segments for n in range(a, b, every)]
+            est = rend.estimate_tiles(times)
+            print(f"  follow view needs roughly {est} map tiles for this render "
+                  "(downloaded once, then cached).")
+            if est > 2000 and args.tiles in PRESETS:
+                print("  That is a lot for a free public tile server; consider a lower --zoom "
+                      "or rendering in sections.")
         try:
             for a, b in segments:
                 for n in range(a, b):
@@ -300,8 +309,13 @@ def run_overlay(args, clips, track, segments, out, still=False):
         except KeyboardInterrupt:
             proc.kill()
             raise SystemExit("\nInterrupted.")
+        except BaseException:
+            proc.kill()
+            raise
         if proc.wait() != 0:
             raise SystemExit("ffmpeg failed; see messages above.")
+        if tiles and tiles.downloaded:
+            print(f"  downloaded {tiles.downloaded} map tiles (cached in {tiles.cache})")
 
 
 def segments_from_args(args, clips):

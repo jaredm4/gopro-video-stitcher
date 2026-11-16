@@ -43,6 +43,7 @@ class TileSource:
             self.max_zoom = max_zoom
         self.cache = os.path.join(cache_dir or default_cache_dir(), name)
         self.failed = 0
+        self._used = False
         self.downloaded = 0
 
     def tile(self, z, x, y):
@@ -87,12 +88,14 @@ class TileSource:
             raise SystemExit(f"Map would need {count} tiles (limit {MAX_TILES}). "
                              "Use a lower --zoom, --view fit, or --style path.")
         out = Image.new("RGB", (x1 - x0, y1 - y0), (58, 62, 66))
+        failed_before = self.failed
         for ty in range(ty0, ty1 + 1):
             for tx in range(tx0, tx1 + 1):
                 im = self.tile(z, tx, ty)
                 if im is not None:
                     out.paste(im, (tx * 256 - x0, ty * 256 - y0))
-        if self.failed and self.failed >= count:
+        first, self._used = not self._used, True
+        if first and self.failed - failed_before >= count:
             raise SystemExit("No map tiles could be loaded. Check the network / --tiles URL, "
                              "or use --style path (needs no map data).")
         return out
