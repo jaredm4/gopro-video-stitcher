@@ -21,6 +21,18 @@ def parse_time(s):
     return sec
 
 
+def fraction(s):
+    """'0.2' or '20%' -> 0.2 (argparse type for sizes relative to video height)."""
+    try:
+        v = float(s[:-1]) / 100 if s.endswith("%") else float(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a fraction like 0.2 (or 20%), got {s!r}")
+    if not 0 < v <= 1:
+        raise argparse.ArgumentTypeError(
+            f"expected a fraction of the video height between 0 and 1 (0.2 = 20%), got {s!r}")
+    return v
+
+
 def fmt_time(sec):
     sec = int(round(sec))
     return f"{sec // 3600}:{sec % 3600 // 60:02d}:{sec % 60:02d}"
@@ -169,7 +181,7 @@ def cmd_gps(args):
 def make_style(args, clip):
     h = clip.height
     shape = args.shape or ("circle" if args.style == "map" else "square")
-    size = args.size or int(round(h * 0.20))
+    size = int(round(h * args.size))
     k = size / 432.0
     return Style(style=args.style, view=args.view, shape=shape, size=size,
                  opacity=args.opacity, zoom=args.zoom,
@@ -371,8 +383,9 @@ def build_parser():
         sp.add_argument("--sort", choices=["meta", "mtime", "name"], default="meta",
                         help="clip order: embedded creation time (default), file modified "
                              "time, or file name")
-        sp.add_argument("--max-dop", type=float, default=10.0,
-                        help="ignore GPS samples with dilution of precision above this")
+        sp.add_argument("--max-dop", type=float, default=10.0, metavar="NUMBER",
+                        help="ignore GPS samples with dilution of precision above this "
+                             "(default 10; lower = stricter)")
         sp.add_argument("--ffmpeg", default="ffmpeg")
         sp.add_argument("--ffprobe", default="ffprobe")
 
@@ -382,27 +395,39 @@ def build_parser():
                        help="map = basemap tiles + route; path = route line only")
         g.add_argument("--view", choices=["fit", "follow"], default="fit",
                        help="fit = whole route visible; follow = zoomed in, map moves")
-        g.add_argument("--zoom", type=float, default=16.0, help="zoom level for --view follow")
+        g.add_argument("--zoom", type=float, default=16.0, metavar="LEVEL",
+                       help="web-map zoom level for --view follow; decimals allowed, "
+                            "+1 = twice as close (default 16)")
         g.add_argument("--shape", choices=["circle", "rounded", "square"],
                        help="default: circle for map, square for path")
-        g.add_argument("--size", type=int, help="map size in px (default 20%% of video height)")
-        g.add_argument("--opacity", type=float, default=0.8, help="0..1 (default 0.8)")
+        g.add_argument("--size", type=fraction, default=0.2, metavar="FRACTION",
+                       help="map diameter/side as a fraction of video height: 0.2 or 20%% "
+                            "(default 0.2)")
+        g.add_argument("--opacity", type=float, default=0.8, metavar="0..1",
+                       help="overlay opacity, 0 = invisible, 1 = solid (default 0.8)")
         g.add_argument("--position", choices=["br", "bl", "tr", "tl"], default="br")
-        g.add_argument("--margin", type=int, help="px from the frame edge (default 3%% of height)")
+        g.add_argument("--margin", type=int, metavar="PX",
+                       help="gap to the frame edge in video pixels (default 3%% of height)")
         g.add_argument("--tiles", default="osm",
                        help=f"basemap: {', '.join(PRESETS)}, or a URL template with "
                             "{z} {x} {y}")
-        g.add_argument("--tile-cache", help="folder for downloaded map tiles")
-        g.add_argument("--color", default="#19a7ff", help="travelled route colour")
-        g.add_argument("--rest-color", default="#ffffff", help="route-ahead colour")
-        g.add_argument("--marker-color", default="#ff3b30")
-        g.add_argument("--line-width", type=float)
-        g.add_argument("--backdrop", type=float, default=0.0,
-                       help="path style: darkness of a panel behind the line, 0..1")
+        g.add_argument("--tile-cache", metavar="FOLDER", help="folder for downloaded map tiles")
+        g.add_argument("--color", default="#19a7ff", metavar="COLOUR",
+                       help="travelled route: #RRGGBB hex or a CSS name like 'orange'")
+        g.add_argument("--rest-color", default="#ffffff", metavar="COLOUR",
+                       help="route still ahead (same formats)")
+        g.add_argument("--marker-color", default="#ff3b30", metavar="COLOUR",
+                       help="position dot (same formats)")
+        g.add_argument("--line-width", type=float, metavar="PX",
+                       help="route line thickness in video pixels (default scales with --size)")
+        g.add_argument("--backdrop", type=float, default=0.0, metavar="0..1",
+                       help="path style: darkness of a panel behind the line (default 0 = none)")
         g.add_argument("--no-coords", action="store_true", help="hide the lat/lon text")
-        g.add_argument("--font", help="path to a .ttf for the text")
-        g.add_argument("--font-size", type=int, default=0)
-        sp.add_argument("--hwaccel", help="ffmpeg decode acceleration, e.g. cuda")
+        g.add_argument("--font", metavar="FILE", help="path to a .ttf/.otf font for the text")
+        g.add_argument("--font-size", type=int, default=0, metavar="PX",
+                       help="text height in video pixels (default 0 = fit to map width)")
+        sp.add_argument("--hwaccel", metavar="NAME",
+                        help="ffmpeg decode acceleration method, e.g. cuda")
 
     sp = sub.add_parser("info", help="list clips in stitch order and summarise the GPS data")
     common(sp)
@@ -421,7 +446,8 @@ def build_parser():
     sp = sub.add_parser("preview", help="write still frames with the overlay, to tune the look")
     common(sp)
     look(sp)
-    sp.add_argument("--at", action="append", help="time, e.g. 1:30 (repeatable). "
+    sp.add_argument("--at", action="append", metavar="TIME",
+                    help="time as seconds, M:SS or H:MM:SS, e.g. 1:30 (repeatable). "
                     "Default: 25%%, 50%%, 75%% through")
     sp.add_argument("-o", "--output", help="output folder")
     sp.set_defaults(func=cmd_preview)
@@ -433,8 +459,9 @@ def build_parser():
     sp.add_argument("--keep", action="append", metavar="START-END",
                     help="keep only this time range of the stitched timeline, e.g. "
                          "0:30-2:10 (repeatable, or comma-separated)")
-    sp.add_argument("--start", help="render a sample starting here (with --duration)")
-    sp.add_argument("--duration", help="sample length, e.g. 20")
+    sp.add_argument("--start", metavar="TIME",
+                    help="render a sample starting here: seconds, M:SS or H:MM:SS")
+    sp.add_argument("--duration", metavar="TIME", help="sample length, same formats, e.g. 20")
     sp.add_argument("--encoder", choices=["hevc_nvenc", "libx265"], default="hevc_nvenc")
     sp.add_argument("--quality", type=float,
                     help="NVENC -cq (default 21) or x265 -crf (default 18); lower = better")
